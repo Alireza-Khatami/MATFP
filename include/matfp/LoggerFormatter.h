@@ -9,8 +9,8 @@
 // Only used in Logger.h
 #pragma once
 
-#include <spdlog/fmt/bundled/format.h>
-#include <spdlog/fmt/bundled/ranges.h>
+#include <spdlog/fmt/fmt.h>  // bundled or external fmt, whichever spdlog uses
+#include <spdlog/fmt/ranges.h>
 
 #include <array>
 #include <vector>
