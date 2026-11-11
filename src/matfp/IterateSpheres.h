@@ -9,6 +9,7 @@
 
 #include <geogram/mesh/mesh.h>
 
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -53,14 +54,46 @@ struct IterTrace {
   std::vector<double> plane_energy;
   std::vector<Vector3> cc_point, cc_normal;
   std::vector<double> cc_energy;
+  // per record, PLANES only (else -1 / NaN): nearest point q, its face,
+  // squared distance to the concave edges (inf = no concave edges)
+  std::vector<int> q_fid;
+  std::vector<Vector3> q_point;
+  std::vector<double> q_sq_dist_to_cc;
   int stop = RUNNING, num_itr = 0;
   bool is_good = false;
+
+  // every 4x4 solve: N * (c, r) = b, N row-major; x = (c, r), NaN if not
+  // invertible; fail = -1 or the Stop SOLVE_* value
+  std::vector<int> solve_iter, solve_fail;
+  std::vector<std::array<double, 16>> solve_N;
+  std::vector<std::array<double, 4>> solve_b, solve_x;
+
+  // Stage 2: every 2-ring face tried for plane cand_plane (index in the SOLVE
+  // record), closest point and energy; improved = below the best so far (the
+  // last improved one is taken)
+  bool with_candidates = true;
+  std::vector<int> cand_iter, cand_plane, cand_fid, cand_improved;
+  std::vector<Vector3> cand_point;
+  std::vector<double> cand_energy;
+
+  // after the loop (update_spheres): post_cc = deleted by the concave-distance
+  // check; dup_of = sphere this one duplicated (deleted, D_DUP);
+  // dup_junction_of = duplicate kept because it is a junction; purge = Purge
+  enum Purge { PURGE_NONE = 0, PURGE_FEW_PLANES = 1, PURGE_SMALL_VARIANCE = 2 };
+  int post_cc = 0, dup_of = -1, dup_junction_of = -1, purge = PURGE_NONE;
 
   // mat_p.tan_planes get status KEPT (first_status for plane 0), then removed
   void add(int st, int it, const MVertex& mat_p, double e_over_sq_r = NAN,
            int q_skip = 0, int first_status = KEPT,
            const std::vector<std::pair<TangentPlane, int>>* removed = nullptr);
 };
+
+// traces[tag]: dup_of / dup_junction_of from remove_duplicated_medial_spheres'
+// dup_pairs, purge from purge_tan_planes (tag == index, as MATFP requires)
+void record_post_loop(const std::vector<MVertex>& all_medial_spheres,
+                      const std::vector<std::array<int, 3>>& dup_pairs,
+                      const std::vector<int>& purge,
+                      std::vector<IterTrace>& traces);
 
 // Default parameters:
 // alpha1 = 0.01;  // energy of distance to tangent point

@@ -85,8 +85,11 @@ bool is_cc_part_has_small_normal_variance(
 // make sure all tan_elements has only one tangent point
 // also delete those tangent planes that are marked as delete
 // also remove sphere if contains no tangent planes
-void purge_tan_planes(std::vector<MVertex>& all_medial_spheres) {
+// purge (optional): resized to all_medial_spheres, IterTrace::Purge per sphere
+void purge_tan_planes(std::vector<MVertex>& all_medial_spheres,
+                      std::vector<int>* purge = nullptr) {
   logger().debug("start purging tangent planes for all spheres ...");
+  if (purge) purge->assign(all_medial_spheres.size(), IterTrace::PURGE_NONE);
   std::set<int> purge_spikes;
   for (auto& mat_p : all_medial_spheres) {
     if (mat_p.is_deleted || mat_p.is_outside) continue;
@@ -122,6 +125,8 @@ void purge_tan_planes(std::vector<MVertex>& all_medial_spheres) {
     //       eg. some spheres are partually covered by another
     if (tan_planes.size() < 2 && mat_p.tan_cc_lines.size() < 1) {
       purge_spikes.insert(mat_p.tag);
+      if (purge)
+        (*purge)[&mat_p - all_medial_spheres.data()] = IterTrace::PURGE_FEW_PLANES;
       mat_p.is_deleted = true;
       continue;
     }
@@ -148,6 +153,8 @@ void purge_tan_planes(std::vector<MVertex>& all_medial_spheres) {
       // centroid[1], centroid[2], 	variance
       // );
       purge_spikes.insert(mat_p.tag);
+      if (purge)
+        (*purge)[&mat_p - all_medial_spheres.data()] = IterTrace::PURGE_SMALL_VARIANCE;
       mat_p.is_deleted = true;
     }
   }  // for all_medial_spheres
@@ -785,6 +792,7 @@ void update_spheres(const GEO::Mesh& sf_mesh,
         //                mat_p.tag);
         mat_p.is_deleted = true;
         deleted_spheres.insert(mat_p.tag);
+        if (trace) trace->post_cc = 1;
         break;
       }
     }  // for mat_p.tan_planes
@@ -818,10 +826,14 @@ void update_spheres(const GEO::Mesh& sf_mesh,
                  updated_spheres.size(), deleted_spheres.size());
   // Remove duplicates
   // sort spheres and delete duplicated spheres
+  std::vector<std::array<int, 3>> dup_pairs;
+  std::vector<int> purge;
   remove_duplicated_medial_spheres(sorted_partial_medial_spheres,
-                                   all_medial_spheres);
+                                   all_medial_spheres, false,
+                                   traces ? &dup_pairs : nullptr);
 
-  purge_tan_planes(all_medial_spheres);
+  purge_tan_planes(all_medial_spheres, traces ? &purge : nullptr);
+  if (traces) record_post_loop(all_medial_spheres, dup_pairs, purge, *traces);
 }
 
 }  // namespace matfp

@@ -352,7 +352,8 @@ void update_intf_adjacency(const int cur_tag,
 // will sort sorted_partial_medial_spheres in place
 int remove_duplicated_medial_spheres(
     std::vector<MVertex>& sorted_partial_medial_spheres,
-    std::vector<MVertex>& all_medial_spheres, bool is_override) {
+    std::vector<MVertex>& all_medial_spheres, bool is_override,
+    std::vector<std::array<int, 3>>* dup_pairs) {
   if (is_override || sorted_partial_medial_spheres.empty()) {
     sorted_partial_medial_spheres.clear();
     sorted_partial_medial_spheres = all_medial_spheres;
@@ -397,6 +398,7 @@ int remove_duplicated_medial_spheres(
             true;  // this is the real deletion
         all_medial_spheres[mat_curr.tag].is_deleted_int = DeletionType::D_DUP;
         deleted_set.insert(mat_curr.tag);
+        if (dup_pairs) dup_pairs->push_back({{mat_curr.tag, mat_next.tag, 1}});
         // logger().debug("[Delete] delete mat_curr {}, mat_next {}",
         // mat_curr.tag, mat_next.tag);
 
@@ -407,6 +409,7 @@ int remove_duplicated_medial_spheres(
             "[Delete] mat_curr {} is an internal junction, cannot be deletd, "
             "intf_adj_intf: {}, mat_next {}",
             mat_curr.tag, mat_curr.intf_adj_intf, mat_next.tag);
+        if (dup_pairs) dup_pairs->push_back({{mat_curr.tag, mat_next.tag, 0}});
       }
     }
     curr_idx = n_idx;

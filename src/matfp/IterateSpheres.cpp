@@ -27,13 +27,26 @@ bool update_sphere_given_plN_opt(
     const std::vector<Vector3>& nN, const double alpha3,
     const std::vector<Vector3>& c_pN, const std::vector<Vector3>& c_nN,
     Vector3& new_center, double& new_sq_radius, bool is_debug,
-    int* fail = nullptr) {
+    IterTrace* trace = nullptr, int iter = 0) {
+  // trace: N, b, x of this solve, fail = -1 or Stop SOLVE_*
+  auto rec = [&](int fail, const Matrix4* N, const Vector4* b, const Vector4* x) {
+    if (!trace) return;
+    std::array<double, 16> n;
+    std::array<double, 4> bb, xx;
+    for (int i = 0; i < 16; i++) n[i] = N ? (*N)(i / 4, i % 4) : NAN;
+    for (int i = 0; i < 4; i++) bb[i] = b ? (*b)[i] : NAN, xx[i] = x ? (*x)[i] : NAN;
+    trace->solve_iter.push_back(iter);
+    trace->solve_fail.push_back(fail);
+    trace->solve_N.push_back(n);
+    trace->solve_b.push_back(bb);
+    trace->solve_x.push_back(xx);
+  };
   if (pN.size() != nN.size() || c_pN.size() != c_nN.size()) {
     logger().error(
         "[TAN_PLN] unmatched plane parameters, pN: {}, nN: {}, c_pN: {}, c_nN: "
         "{}",
         pN.size(), nN.size(), c_pN.size(), c_nN.size());
-    if (fail) *fail = IterTrace::SOLVE_SIZE_MISMATCH;
+    rec(IterTrace::SOLVE_SIZE_MISMATCH, nullptr, nullptr, nullptr);
     return false;
   }
 
@@ -89,7 +102,7 @@ bool update_sphere_given_plN_opt(
     //     N(0, 0), N(0, 1), N(0, 2), N(0, 3), N(1, 0), N(1, 1), N(1, 2), N(1,
     //     3), N(2, 0), N(2, 1), N(2, 2), N(2, 3), N(3, 0), N(3, 1), N(3, 2),
     //     N(3, 3));
-    if (fail) *fail = IterTrace::SOLVE_NOT_INVERTIBLE;
+    rec(IterTrace::SOLVE_NOT_INVERTIBLE, &N, &b, nullptr);
     return false;
   }
 
@@ -100,9 +113,10 @@ bool update_sphere_given_plN_opt(
                    c_r[0], c_r[1], c_r[2], c_r[3]);
   }
   if (c_r[3] < SCALAR_ZERO_N3) {
-    if (fail) *fail = IterTrace::SOLVE_SMALL_RADIUS;
+    rec(IterTrace::SOLVE_SMALL_RADIUS, &N, &b, &c_r);
     return false;
   }
+  rec(IterTrace::RUNNING, &N, &b, &c_r);
   new_center = Vector3(c_r[0], c_r[1], c_r[2]);
   new_sq_radius = std::pow(c_r[3], 2);
   return true;
@@ -279,7 +293,10 @@ void update_tangent_points_on_tan_pls(
     const GEO::Mesh& sf_mesh,
     const std::set<std::array<int, 2>>& ref_fs_pairs_not_cross, MVertex& mat_p,
     const double alpha1, const double alpha2, bool is_debug,
-    std::vector<std::pair<TangentPlane, int>>* removed = nullptr) {
+    std::vector<std::pair<TangentPlane, int>>* removed = nullptr,
+    IterTrace* trace = nullptr, int iter = 0) {
+  const bool rec_cand = trace && trace->with_candidates;
+  int plane_idx = -1;
   if (is_debug) {
     logger().debug("calling update_tangent_points_on_tan_pls for mat_p {}...",
                    mat_p.tag);
@@ -297,6 +314,7 @@ void update_tangent_points_on_tan_pls(
   std::vector<TangentPlane> tan_planes_new;
 
   for (auto& tan_pl : mat_p.tan_planes) {
+    plane_idx++;
     if (is_debug) {
       logger().debug("[Update TAN_POINT] before update:");
       tan_pl.print_info();
@@ -313,6 +331,14 @@ void update_tangent_points_on_tan_pls(
       double e_tmp = get_closest_tangent_point_opt(
           alpha1, alpha2, f_param[0], f_param[1], f_param[2], f_param[3],
           mat_p.pos, mat_p.sq_radius, pN_tmp, false /*is_debug*/);
+      if (rec_cand) {
+        trace->cand_iter.push_back(iter);
+        trace->cand_plane.push_back(plane_idx);
+        trace->cand_fid.push_back(fid_tmp);
+        trace->cand_point.push_back(pN_tmp);
+        trace->cand_energy.push_back(e_tmp);
+        trace->cand_improved.push_back(e_tmp < tan_pl.energy);
+      }
       if (e_tmp < tan_pl.energy) {
         // update tangent point
         tan_pl.energy = e_tmp;
@@ -462,11 +488,16 @@ bool prepare_next_iterate(
     double prev_energy_over_sq_radius = sum_energy_over_sq_radius;
     double sum_energy = mat_p.update_all_energy_values(alpha1, alpha2, alpha3);
     sum_energy_over_sq_radius = sum_energy / mat_p.sq_radius;
-    if (trace)
+    if (trace) {
       trace->add(IterTrace::ST_PLANES, num_itr, mat_p, sum_energy_over_sq_radius,
                  is_skip_add_new_tan_pl ? 1 : 0,
                  is_skip_add_new_tan_pl ? IterTrace::KEPT : IterTrace::ADDED_Q,
                  &removed);
+      trace->q_fid.back() = q_fid;
+      trace->q_point.back() = q;
+      trace->q_sq_dist_to_cc.back() =
+          q_sq_dist_to_cc >= DBL_MAX ? INFINITY : q_sq_dist_to_cc;
+    }
 
     if (is_debug) {
       logger().debug(
@@ -625,6 +656,9 @@ void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
   pos.push_back(mat_p.pos);
   sq_radius.push_back(mat_p.sq_radius);
   energy_over_sq_radius.push_back(e_over_sq_r);
+  q_fid.push_back(-1);
+  q_point.push_back(Vector3(NAN, NAN, NAN));
+  q_sq_dist_to_cc.push_back(NAN);
   auto push_plane = [&](const TangentPlane& tp, int status) {
     plane_point.push_back(tp.points.empty() ? Vector3(NAN, NAN, NAN)
                                             : tp.points[0]);
@@ -644,6 +678,22 @@ void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
     cc_energy.push_back(l.energy);
   }
   cc_ptr.push_back((int)cc_energy.size());
+}
+
+void record_post_loop(const std::vector<MVertex>& all_medial_spheres,
+                      const std::vector<std::array<int, 3>>& dup_pairs,
+                      const std::vector<int>& purge,
+                      std::vector<IterTrace>& traces) {
+  const int n = (int)all_medial_spheres.size();
+  if ((int)traces.size() != n) log_and_throw("[Trace] traces size != spheres");
+  for (const auto& d : dup_pairs) {
+    if (d[0] < 0 || d[0] >= n) log_and_throw("[Trace] dup tag out of range");
+    if (d[2])
+      traces[d[0]].dup_of = d[1];
+    else
+      traces[d[0]].dup_junction_of = d[1];
+  }
+  for (int i = 0; i < (int)purge.size() && i < n; i++) traces[i].purge = purge[i];
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
@@ -701,10 +751,9 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     // Step 1: update sphere given tangent points
     Vector3 new_pos = Vector3::Zero();
     double new_sq_radius = 0.;
-    int solve_fail = IterTrace::RUNNING;
     bool is_success = update_sphere_given_plN_opt(
         alpha1, alpha2, pN, nN, alpha3, c_pN, c_nN, new_pos, new_sq_radius,
-        is_debug, trace ? &solve_fail : nullptr);
+        is_debug, trace, num_itr);
     if (is_debug)
       logger().debug("update_sphere_given_plN_opt is_success: {}", is_success);
     if (!is_success || new_sq_radius < SCALAR_ZERO_N6) {
@@ -713,7 +762,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
       is_good = false;
       if (trace)
         trace->stop =
-            is_success ? IterTrace::SOLVE_SMALL_SQ_RADIUS : solve_fail;
+            is_success ? IterTrace::SOLVE_SMALL_SQ_RADIUS : trace->solve_fail.back();
       break;
     }
     mat_p.save_old_pos_radius();
@@ -726,7 +775,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     std::vector<std::pair<TangentPlane, int>> removed;
     update_tangent_points_on_tan_pls(sf_mesh, ref_fs_pairs_not_cross, mat_p,
                                      alpha1, alpha2, is_debug /*is_debug*/,
-                                     trace ? &removed : nullptr);
+                                     trace ? &removed : nullptr, trace, num_itr);
     if (is_debug) {
       logger().debug(
           "[Update TAN_POINT] mat_p {} has tangent planes after update: ",

@@ -36,7 +36,8 @@ void collect_and_update_DT_feature_tets(
 ////////////////////////////////////////////////////////////////////////////////////
 int remove_duplicated_medial_spheres(
     std::vector<MVertex>& sorted_partial_medial_spheres,
-    std::vector<MVertex>& all_medial_spheres, bool is_override = false);
+    std::vector<MVertex>& all_medial_spheres, bool is_override = false,
+    std::vector<std::array<int, 3>>* dup_pairs = nullptr);  // {tag, equal tag, deleted}
 
 bool is_internal_medial_feature(const SphereType& type);
 
