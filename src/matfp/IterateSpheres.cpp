@@ -26,12 +26,14 @@ bool update_sphere_given_plN_opt(
     const double alpha1, const double alpha2, const std::vector<Vector3>& pN,
     const std::vector<Vector3>& nN, const double alpha3,
     const std::vector<Vector3>& c_pN, const std::vector<Vector3>& c_nN,
-    Vector3& new_center, double& new_sq_radius, bool is_debug) {
+    Vector3& new_center, double& new_sq_radius, bool is_debug,
+    int* fail = nullptr) {
   if (pN.size() != nN.size() || c_pN.size() != c_nN.size()) {
     logger().error(
         "[TAN_PLN] unmatched plane parameters, pN: {}, nN: {}, c_pN: {}, c_nN: "
         "{}",
         pN.size(), nN.size(), c_pN.size(), c_nN.size());
+    if (fail) *fail = IterTrace::SOLVE_SIZE_MISMATCH;
     return false;
   }
 
@@ -87,6 +89,7 @@ bool update_sphere_given_plN_opt(
     //     N(0, 0), N(0, 1), N(0, 2), N(0, 3), N(1, 0), N(1, 1), N(1, 2), N(1,
     //     3), N(2, 0), N(2, 1), N(2, 2), N(2, 3), N(3, 0), N(3, 1), N(3, 2),
     //     N(3, 3));
+    if (fail) *fail = IterTrace::SOLVE_NOT_INVERTIBLE;
     return false;
   }
 
@@ -96,7 +99,10 @@ bool update_sphere_given_plN_opt(
     logger().debug("[TAN_PLN] mat new sphere: center ({},{},{}), radius: {}",
                    c_r[0], c_r[1], c_r[2], c_r[3]);
   }
-  if (c_r[3] < SCALAR_ZERO_N3) return false;
+  if (c_r[3] < SCALAR_ZERO_N3) {
+    if (fail) *fail = IterTrace::SOLVE_SMALL_RADIUS;
+    return false;
+  }
   new_center = Vector3(c_r[0], c_r[1], c_r[2]);
   new_sq_radius = std::pow(c_r[3], 2);
   return true;
@@ -272,7 +278,8 @@ double get_closest_tangent_point_opt(const double alpha1, const double alpha2,
 void update_tangent_points_on_tan_pls(
     const GEO::Mesh& sf_mesh,
     const std::set<std::array<int, 2>>& ref_fs_pairs_not_cross, MVertex& mat_p,
-    const double alpha1, const double alpha2, bool is_debug) {
+    const double alpha1, const double alpha2, bool is_debug,
+    std::vector<std::pair<TangentPlane, int>>* removed = nullptr) {
   if (is_debug) {
     logger().debug("calling update_tangent_points_on_tan_pls for mat_p {}...",
                    mat_p.tag);
@@ -335,6 +342,7 @@ void update_tangent_points_on_tan_pls(
             mat_p.tag, tan_pl.fid);
       }
       tan_pl.is_deleted = true;
+      if (removed) removed->push_back({tan_pl, IterTrace::DELETED_SAME_FID});
       continue;
     }
     // 2. remove similar tangent planes
@@ -347,6 +355,7 @@ void update_tangent_points_on_tan_pls(
               mat_p.tag);
         }
         tan_pl.is_deleted = true;
+        if (removed) removed->push_back({tan_pl, IterTrace::DELETED_SIMILAR});
         break;
       }
     }
@@ -375,7 +384,8 @@ bool prepare_next_iterate(
     const GEO::Mesh& sf_mesh, const AABBWrapper& aabb_wrapper, MVertex& mat_p,
     double& sum_energy_over_sq_radius, std::vector<Vector3>& pN,
     std::vector<Vector3>& nN, std::vector<Vector3>& c_pN,
-    std::vector<Vector3>& c_nN, bool& is_good, bool is_debug) {
+    std::vector<Vector3>& c_nN, bool& is_good, bool is_debug,
+    IterTrace* trace = nullptr) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -412,6 +422,7 @@ bool prepare_next_iterate(
             mat_p.tag, num_itr, q_fid, q_sq_dist_to_cc);
       }
     }
+    std::vector<std::pair<TangentPlane, int>> removed;
     // create new tangent plane
     // and update existing tangent planes
     if (!is_skip_add_new_tan_pl) {
@@ -423,6 +434,7 @@ bool prepare_next_iterate(
       for (auto& tan_pl : mat_p.tan_planes) {
         if (tan_pl.is_same_normal(qnormal)) {
           tan_pl.is_deleted = true;
+          if (trace) removed.push_back({tan_pl, IterTrace::REMOVED_SAME_N_Q});
           if (is_debug) {
             logger().debug(
                 "[Iterate] mat_p {} num_itr: {} remove tangent plane:",
@@ -450,6 +462,11 @@ bool prepare_next_iterate(
     double prev_energy_over_sq_radius = sum_energy_over_sq_radius;
     double sum_energy = mat_p.update_all_energy_values(alpha1, alpha2, alpha3);
     sum_energy_over_sq_radius = sum_energy / mat_p.sq_radius;
+    if (trace)
+      trace->add(IterTrace::ST_PLANES, num_itr, mat_p, sum_energy_over_sq_radius,
+                 is_skip_add_new_tan_pl ? 1 : 0,
+                 is_skip_add_new_tan_pl ? IterTrace::KEPT : IterTrace::ADDED_Q,
+                 &removed);
 
     if (is_debug) {
       logger().debug(
@@ -466,6 +483,7 @@ bool prepare_next_iterate(
             sum_energy_over_sq_radius, break_threshold);
 
       is_good = true;
+      if (trace) trace->stop = IterTrace::GOOD;
       return true;  // break
     }
     // change is too small, not good
@@ -480,6 +498,7 @@ bool prepare_next_iterate(
             sum_energy_over_sq_radius, prev_energy_over_sq_radius,
             break_threshold);
       is_good = false;
+      if (trace) trace->stop = IterTrace::ENERGY_STALL;
       return true;  // break
     }
 
@@ -492,6 +511,9 @@ bool prepare_next_iterate(
             "energy: {}, mat_p.sq_radius {}",
             mat_p.tag, num_itr, sum_energy, mat_p.sq_radius);
       is_good = false;
+      if (trace)
+        trace->stop = num_itr > iteration_limit ? IterTrace::ITER_LIMIT
+                                                : IterTrace::SMALL_SQ_RADIUS;
       return true;  // break
     }
   }  // if (num_itr != 0)
@@ -594,6 +616,36 @@ void update_tangent_points_on_cc_lines(MVertex& mat_p, const double alpha3,
   }
 }
 
+void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
+                    int q_skip, int first_status,
+                    const std::vector<std::pair<TangentPlane, int>>* removed) {
+  stage.push_back(st);
+  iter.push_back(it);
+  q_skipped.push_back(q_skip);
+  pos.push_back(mat_p.pos);
+  sq_radius.push_back(mat_p.sq_radius);
+  energy_over_sq_radius.push_back(e_over_sq_r);
+  auto push_plane = [&](const TangentPlane& tp, int status) {
+    plane_point.push_back(tp.points.empty() ? Vector3(NAN, NAN, NAN)
+                                            : tp.points[0]);
+    plane_normal.push_back(tp.normal);
+    plane_fid.push_back(tp.fid);
+    plane_energy.push_back(tp.energy);
+    plane_status.push_back(status);
+  };
+  for (size_t i = 0; i < mat_p.tan_planes.size(); i++)
+    push_plane(mat_p.tan_planes[i], i == 0 ? first_status : KEPT);
+  if (removed)
+    for (const auto& r : *removed) push_plane(r.first, r.second);
+  plane_ptr.push_back((int)plane_fid.size());
+  for (const auto& l : mat_p.tan_cc_lines) {
+    cc_point.push_back(l.tan_point);
+    cc_normal.push_back(l.normal);
+    cc_energy.push_back(l.energy);
+  }
+  cc_ptr.push_back((int)cc_energy.size());
+}
+
 /////////////////////////////////////////////////////////////////////////////////////
 // Main Functions
 /////////////////////////////////////////////////////////////////////////////////////
@@ -606,15 +658,18 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     const std::set<std::array<int, 2>>& ref_fs_pairs_not_cross,
                     const AABBWrapper& aabb_wrapper, MVertex& mat_p,
                     bool is_debug, double alpha1, double alpha2, double alpha3,
-                    const double break_threshold, const int iteration_limit) {
+                    const double break_threshold, const int iteration_limit,
+                    IterTrace* trace) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
         mat_p.tag, is_debug);
   }
 
+  if (trace) trace->add(IterTrace::ST_INPUT, 0, mat_p);
   // update tangent planes first
   mat_p.update_tan_planes_by_sf_mesh(sf_mesh, aabb_wrapper);
+  if (trace) trace->add(IterTrace::ST_SNAP, 0, mat_p);
   int num_itr = 0;
   // mat_p.store_sq_energy(aabb_wrapper);  // init
   double sum_energy_over_sq_radius = -1;
@@ -640,31 +695,38 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     bool is_break = prepare_next_iterate(
         iteration_limit, num_itr, alpha1, alpha2, alpha3, break_threshold,
         sf_mesh, aabb_wrapper, mat_p, sum_energy_over_sq_radius, pN, nN, c_pN,
-        c_nN, is_good, is_debug);
+        c_nN, is_good, is_debug, trace);
     if (is_break) break;
 
     // Step 1: update sphere given tangent points
     Vector3 new_pos = Vector3::Zero();
     double new_sq_radius = 0.;
-    bool is_success =
-        update_sphere_given_plN_opt(alpha1, alpha2, pN, nN, alpha3, c_pN, c_nN,
-                                    new_pos, new_sq_radius, is_debug);
+    int solve_fail = IterTrace::RUNNING;
+    bool is_success = update_sphere_given_plN_opt(
+        alpha1, alpha2, pN, nN, alpha3, c_pN, c_nN, new_pos, new_sq_radius,
+        is_debug, trace ? &solve_fail : nullptr);
     if (is_debug)
       logger().debug("update_sphere_given_plN_opt is_success: {}", is_success);
     if (!is_success || new_sq_radius < SCALAR_ZERO_N6) {
       //////////////////////////
       // Break condition part 4
       is_good = false;
+      if (trace)
+        trace->stop =
+            is_success ? IterTrace::SOLVE_SMALL_SQ_RADIUS : solve_fail;
       break;
     }
     mat_p.save_old_pos_radius();
     mat_p.pos = new_pos;
     mat_p.sq_radius = new_sq_radius;
+    if (trace) trace->add(IterTrace::ST_SOLVE, num_itr, mat_p);
 
     // Step 2: update tangent points given new sphere
     // 1. update tangent planes
+    std::vector<std::pair<TangentPlane, int>> removed;
     update_tangent_points_on_tan_pls(sf_mesh, ref_fs_pairs_not_cross, mat_p,
-                                     alpha1, alpha2, is_debug /*is_debug*/);
+                                     alpha1, alpha2, is_debug /*is_debug*/,
+                                     trace ? &removed : nullptr);
     if (is_debug) {
       logger().debug(
           "[Update TAN_POINT] mat_p {} has tangent planes after update: ",
@@ -673,6 +735,9 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     }
     // 2. update concave lines
     update_tangent_points_on_cc_lines(mat_p, alpha3, is_debug);
+    if (trace)
+      trace->add(IterTrace::ST_TANGENT, num_itr, mat_p, NAN, 0, IterTrace::KEPT,
+                 &removed);
     num_itr++;
     // mat_p.store_sq_energy(aabb_wrapper);
   }  // while true
@@ -680,6 +745,10 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
   if (is_debug)
     logger().debug("[Iterate] mat_p: {} iterated {} time, is_good: {}",
                    mat_p.tag, num_itr, is_good);
+  if (trace) {
+    trace->num_itr = num_itr;
+    trace->is_good = is_good && num_itr != 0;
+  }
   if (is_good == false || num_itr == 0) {
     return false;
   }

@@ -726,7 +726,9 @@ bool is_sphere_need_to_be_updated(MVertex& mat_p) {
 void update_spheres(const GEO::Mesh& sf_mesh,
                     const std::set<std::array<int, 2>>& ref_fs_pairs_not_cross,
                     const AABBWrapper& aabb_wrapper,
-                    std::vector<MVertex>& all_medial_spheres, bool is_debug) {
+                    std::vector<MVertex>& all_medial_spheres, bool is_debug,
+                    std::vector<IterTrace>* traces) {
+  if (traces) traces->assign(all_medial_spheres.size(), IterTrace());
   // make sure all new updated spheres are unique
   std::vector<MVertex> sorted_partial_medial_spheres;
   std::set<int> updated_spheres, deleted_spheres;
@@ -756,8 +758,11 @@ void update_spheres(const GEO::Mesh& sf_mesh,
     updated_spheres.insert(mat_p.tag);
     if (is_debug)
       logger().debug("[Update] mat_p {} is going to be updated!!!", mat_p.tag);
-    bool is_success = iterate_sphere(sf_mesh, ref_fs_pairs_not_cross,
-                                     aabb_wrapper, mat_p, is_debug);
+    IterTrace* trace =
+        traces ? &(*traces)[&mat_p - all_medial_spheres.data()] : nullptr;
+    bool is_success = iterate_sphere(
+        sf_mesh, ref_fs_pairs_not_cross, aabb_wrapper, mat_p, is_debug, 0.01,
+        1, 1, SCALAR_ZERO_N4, 30, trace);
 
     if (!is_success) {
       if (is_debug)

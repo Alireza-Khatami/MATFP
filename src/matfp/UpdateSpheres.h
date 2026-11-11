@@ -10,6 +10,7 @@
 #include <geogram/mesh/mesh.h>
 
 #include "InscribedSpheres.h"
+#include "matfp/IterateSpheres.h"
 #include "matfp/NonManifoldMesh/Nonmanifoldmesh.h"
 #include "matfp/Types/CommonTypes.h"
 #include "matfp/Types/DelaunayTriangulation.h"
@@ -34,10 +35,12 @@ void update_tan_elements_and_cc_parts_using_RDP(
     std::vector<MVertex>& all_medial_spheres, bool is_update_tan_pls);
 
 // for use
+// traces (optional): resized to all_medial_spheres, traces[i] filled if sphere i is iterated
 void update_spheres(const GEO::Mesh& sf_mesh,
                     const std::set<std::array<int, 2>>& ref_fs_pairs_not_cross,
                     const AABBWrapper& aabb_wrapper,
-                    std::vector<MVertex>& all_medial_spheres, bool is_debug);
+                    std::vector<MVertex>& all_medial_spheres, bool is_debug,
+                    std::vector<IterTrace>* traces = nullptr);
 
 // remove low quality spheres
 // 1. if contains only < 2 cc_part and no concave line, and normal variance is
