@@ -93,15 +93,22 @@ double TangentConcaveLine::get_energy_value(const Vector3& theta,
                                             const double alpha3,
                                             const Vector3& tan_point,
                                             const Vector3& normal) {
+  return alpha3 * get_energy_term(theta, radius, tan_point, normal);
+}
+double TangentConcaveLine::get_energy_term(const Vector3& theta,
+                                           const double& radius,
+                                           const Vector3& tan_point,
+                                           const Vector3& normal) {
   Vector3 T = theta + radius * normal - tan_point;
-  return alpha3 * T.dot(T);
+  return T.dot(T);
 }
 // sphere (theta, radiu)
 double TangentConcaveLine::update_energy_value(const Vector3& theta,
                                                const double& radius,
                                                const double alpha3) {
   // sanity_check();
-  energy = get_energy_value(theta, radius, alpha3, tan_point, normal);
+  e_crease = get_energy_term(theta, radius, tan_point, normal);
+  energy = alpha3 * e_crease;
   energy_over_sq_radius = energy / std::pow(radius, 2);
   return energy;
 }
@@ -180,6 +187,7 @@ bool TangentPlane::clear() {
   extrude_ratio = -1;
   fid = -1;
   energy = DBL_MAX;
+  e_s2p = e_plane = NAN;
 }
 
 bool TangentPlane::is_same_normal(const Vector3& bnormal,
@@ -298,9 +306,18 @@ double TangentPlane::get_energy_value(const Vector3& theta,
                                       const double alpha2,
                                       const Vector3& tan_point,
                                       const Vector3& normal) {
+  double e_s2p, e_plane;
+  get_energy_terms(theta, radius, tan_point, normal, e_s2p, e_plane);
+  return alpha1 * e_s2p + alpha2 * e_plane;
+}
+void TangentPlane::get_energy_terms(const Vector3& theta, const double& radius,
+                                    const Vector3& tan_point,
+                                    const Vector3& normal, double& e_s2p,
+                                    double& e_plane) {
   Vector3 T = theta + radius * normal - tan_point;
   double K = (tan_point - theta).dot(normal) - radius;
-  return alpha1 * T.dot(T) + alpha2 * std::pow(K, 2);
+  e_s2p = T.dot(T);
+  e_plane = std::pow(K, 2);
 }
 // sphere (theta, radiu)
 double TangentPlane::update_energy_value(const Vector3& theta,
@@ -311,7 +328,8 @@ double TangentPlane::update_energy_value(const Vector3& theta,
   // Vector3 T = theta + radius * normal - points[0];
   // double K = (points[0] - theta).dot(normal) - radius;
   // energy = alpha1 * T.dot(T) + alpha2 * std::pow(K, 2);
-  energy = get_energy_value(theta, radius, alpha1, alpha2, points[0], normal);
+  get_energy_terms(theta, radius, points[0], normal, e_s2p, e_plane);
+  energy = alpha1 * e_s2p + alpha2 * e_plane;
   energy_over_sq_radius = energy / std::pow(radius, 2);
   return energy;
 }

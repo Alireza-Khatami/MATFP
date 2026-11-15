@@ -342,6 +342,9 @@ void update_tangent_points_on_tan_pls(
       if (e_tmp < tan_pl.energy) {
         // update tangent point
         tan_pl.energy = e_tmp;
+        TangentPlane::get_energy_terms(mat_p.pos, std::sqrt(mat_p.sq_radius),
+                                       pN_tmp, f_param[3], tan_pl.e_s2p,
+                                       tan_pl.e_plane);  // terms of e_tmp
         tan_pl.fid = fid_tmp;
         tan_pl.points.clear();
         tan_pl.points.push_back(pN_tmp);
@@ -659,6 +662,7 @@ void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
   q_fid.push_back(-1);
   q_point.push_back(Vector3(NAN, NAN, NAN));
   q_sq_dist_to_cc.push_back(NAN);
+  const double radius = std::sqrt(mat_p.sq_radius);
   auto push_plane = [&](const TangentPlane& tp, int status) {
     plane_point.push_back(tp.points.empty() ? Vector3(NAN, NAN, NAN)
                                             : tp.points[0]);
@@ -666,6 +670,14 @@ void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
     plane_fid.push_back(tp.fid);
     plane_energy.push_back(tp.energy);
     plane_status.push_back(status);
+    plane_e_s2p_stored.push_back(tp.e_s2p);
+    plane_e_plane_stored.push_back(tp.e_plane);
+    double s2p = NAN, pl = NAN;
+    if (!tp.points.empty())
+      TangentPlane::get_energy_terms(mat_p.pos, radius, tp.points[0], tp.normal,
+                                     s2p, pl);
+    plane_e_s2p.push_back(s2p);
+    plane_e_plane.push_back(pl);
   };
   for (size_t i = 0; i < mat_p.tan_planes.size(); i++)
     push_plane(mat_p.tan_planes[i], i == 0 ? first_status : KEPT);
@@ -676,6 +688,9 @@ void IterTrace::add(int st, int it, const MVertex& mat_p, double e_over_sq_r,
     cc_point.push_back(l.tan_point);
     cc_normal.push_back(l.normal);
     cc_energy.push_back(l.energy);
+    cc_e_crease_stored.push_back(l.e_crease);
+    cc_e_crease.push_back(TangentConcaveLine::get_energy_term(
+        mat_p.pos, radius, l.tan_point, l.normal));
   }
   cc_ptr.push_back((int)cc_energy.size());
 }

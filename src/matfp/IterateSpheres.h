@@ -54,6 +54,12 @@ struct IterTrace {
   std::vector<double> plane_energy;
   std::vector<Vector3> cc_point, cc_normal;
   std::vector<double> cc_energy;
+  // energy terms, no alphas: s2p T.T, plane K^2, crease T.T (concave line);
+  // _stored = as held by MATFP (refreshed only at PLANES / Stage 2 update),
+  // else recomputed for this record's sphere
+  std::vector<double> plane_e_s2p, plane_e_plane, cc_e_crease;
+  std::vector<double> plane_e_s2p_stored, plane_e_plane_stored,
+      cc_e_crease_stored;
   // per record, PLANES only (else -1 / NaN): nearest point q, its face,
   // squared distance to the concave edges (inf = no concave edges)
   std::vector<int> q_fid;

@@ -43,6 +43,9 @@ class TangentConcaveLine {
   static double get_energy_value(const Vector3& theta, const double& radius,
                                  const double alpha3, const Vector3& tan_point,
                                  const Vector3& normal);
+  // T.T of get_energy_value (no alpha3)
+  static double get_energy_term(const Vector3& theta, const double& radius,
+                                const Vector3& tan_point, const Vector3& normal);
   double update_energy_value(const Vector3& theta, const double& radius,
                              const double alpha3);
 
@@ -64,6 +67,7 @@ class TangentConcaveLine {
   // updated by alpha_3
   double energy;
   double energy_over_sq_radius;  // used as break threshold
+  double e_crease = NAN;         // T.T of energy (no alpha3), set with energy
 
   // facet id of input GEO::Mesh for RPD
   std::array<int, 2> adj_ref_fs_pair;
@@ -109,6 +113,10 @@ class TangentPlane {
                                  const double alpha1, const double alpha2,
                                  const Vector3& tan_point,
                                  const Vector3& normal);
+  // T.T and K^2 of get_energy_value (no alphas)
+  static void get_energy_terms(const Vector3& theta, const double& radius,
+                               const Vector3& tan_point, const Vector3& normal,
+                               double& e_s2p, double& e_plane);
   double update_energy_value(const Vector3& theta, const double& radius,
                              const double alpha1, const double alpha2);
 
@@ -134,6 +142,7 @@ class TangentPlane {
   double energy;                // sphere to minimize this energy function,
                                 // DBL_MAX default
   double energy_over_sq_radius;  // energy / sq_radius, used as break threshold
+  double e_s2p = NAN, e_plane = NAN;  // T.T, K^2 of energy (no alphas)
 
   bool is_deleted;
   bool is_touched;
