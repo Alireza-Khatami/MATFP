@@ -112,5 +112,5 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     double alpha2 = 1, double alpha3 = 1,
                     const double break_threshold = SCALAR_ZERO_N4,
                     const int iteration_limit = 30,
-                    IterTrace* trace = nullptr);
+                    IterTrace* trace = nullptr, bool snap_planes = true);
 }  // namespace matfp

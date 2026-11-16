@@ -724,7 +724,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     const AABBWrapper& aabb_wrapper, MVertex& mat_p,
                     bool is_debug, double alpha1, double alpha2, double alpha3,
                     const double break_threshold, const int iteration_limit,
-                    IterTrace* trace) {
+                    IterTrace* trace, bool snap_planes) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -733,7 +733,13 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
 
   if (trace) trace->add(IterTrace::ST_INPUT, 0, mat_p);
   // update tangent planes first
-  mat_p.update_tan_planes_by_sf_mesh(sf_mesh, aabb_wrapper);
+  // snap_planes false: keep the given normals and fids (each plane needs a fid for the k-ring)
+  if (snap_planes) {
+    mat_p.update_tan_planes_by_sf_mesh(sf_mesh, aabb_wrapper);
+  } else {
+    for (const auto& tan_pl : mat_p.tan_planes)
+      if (tan_pl.fid < 0) log_and_throw("iterate_sphere: snap_planes false needs a fid per tangent plane");
+  }
   if (trace) trace->add(IterTrace::ST_SNAP, 0, mat_p);
   int num_itr = 0;
   // mat_p.store_sq_energy(aabb_wrapper);  // init
