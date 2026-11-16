@@ -724,7 +724,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     const AABBWrapper& aabb_wrapper, MVertex& mat_p,
                     bool is_debug, double alpha1, double alpha2, double alpha3,
                     const double break_threshold, const int iteration_limit,
-                    IterTrace* trace, bool snap_planes) {
+                    IterTrace* trace, bool snap_planes,
+                    bool refresh_plane_energy) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -789,6 +790,12 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     mat_p.save_old_pos_radius();
     mat_p.pos = new_pos;
     mat_p.sq_radius = new_sq_radius;
+    // refresh_plane_energy: Stage 2 compares candidates with each plane's energy at the moved sphere, not the one
+    // stored before Stage 1 (default false = MATFP as is)
+    if (refresh_plane_energy)
+      for (auto& tan_pl : mat_p.tan_planes)
+        if (!tan_pl.points.empty())
+          tan_pl.update_energy_value(mat_p.pos, std::sqrt(mat_p.sq_radius), alpha1, alpha2);
     if (trace) trace->add(IterTrace::ST_SOLVE, num_itr, mat_p);
 
     // Step 2: update tangent points given new sphere
