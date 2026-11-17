@@ -414,7 +414,8 @@ bool prepare_next_iterate(
     double& sum_energy_over_sq_radius, std::vector<Vector3>& pN,
     std::vector<Vector3>& nN, std::vector<Vector3>& c_pN,
     std::vector<Vector3>& c_nN, bool& is_good, bool is_debug,
-    IterTrace* trace = nullptr) {
+    IterTrace* trace = nullptr,
+    const std::vector<TangentConcaveLine>* q_cc_lines = nullptr) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -449,6 +450,41 @@ bool prepare_next_iterate(
             "b/c "
             "too close to concave lines, q_sq_dist_to_cc: {}",
             mat_p.tag, num_itr, q_fid, q_sq_dist_to_cc);
+      }
+    }
+    // q_cc_lines (default null = MATFP as is): a q on a concave line becomes that line, as in shrink_spheres
+    // (ShrinkSpheres.cpp:299-318: sq dist / sq_radius <= SQ_DIST_TO_CC, tan_point q, normal (q - pos))
+    int q_as_cc = 0;
+    if (!is_skip_add_new_tan_pl && q_cc_lines && !q_cc_lines->empty()) {
+      Vector3 q_cc = q;
+      double q_cc_sq_dist;
+      if (aabb_wrapper.project_to_cc_get_nearest_face(q_cc, q_cc_sq_dist) >= 0 &&
+          q_cc_sq_dist / mat_p.sq_radius <= SQ_DIST_TO_CC) {
+        // the line by geometry (cc_tree reorders its edges, so its eid is not an index into the lines)
+        int best = -1;
+        double best_d = DBL_MAX;
+        for (int k = 0; k < (int)q_cc_lines->size(); k++) {
+          const auto& l = (*q_cc_lines)[k];
+          const Vector3 ab = l.ref_vs_pos[1] - l.ref_vs_pos[0];
+          const double t = std::max(0., std::min(1., (q - l.ref_vs_pos[0]).dot(ab) / std::max(ab.squaredNorm(), 1e-300)));
+          const double d = (l.ref_vs_pos[0] + t * ab - q).squaredNorm();
+          if (d < best_d) best_d = d, best = k;
+        }
+        TangentConcaveLine new_cc_line = (*q_cc_lines)[best];
+        new_cc_line.tan_point = q;
+        new_cc_line.normal = (q - mat_p.pos).normalized();
+        bool has = false;
+        for (auto& l : mat_p.tan_cc_lines)
+          if (l == new_cc_line) {
+            l.tan_point = new_cc_line.tan_point, l.normal = new_cc_line.normal, has = true;
+            break;
+          }
+        if (!has) mat_p.tan_cc_lines.push_back(new_cc_line);
+        is_skip_add_new_tan_pl = true;
+        q_as_cc = 1;
+        if (is_debug)
+          logger().debug("[Iterate] mat_p {} num_itr {}: q on concave line {} -> concave line, not a plane",
+                         mat_p.tag, num_itr, new_cc_line.id);
       }
     }
     std::vector<std::pair<TangentPlane, int>> removed;
@@ -493,7 +529,7 @@ bool prepare_next_iterate(
     sum_energy_over_sq_radius = sum_energy / mat_p.sq_radius;
     if (trace) {
       trace->add(IterTrace::ST_PLANES, num_itr, mat_p, sum_energy_over_sq_radius,
-                 is_skip_add_new_tan_pl ? 1 : 0,
+                 is_skip_add_new_tan_pl ? 1 + q_as_cc : 0,
                  is_skip_add_new_tan_pl ? IterTrace::KEPT : IterTrace::ADDED_Q,
                  &removed);
       trace->q_fid.back() = q_fid;
@@ -725,7 +761,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool is_debug, double alpha1, double alpha2, double alpha3,
                     const double break_threshold, const int iteration_limit,
                     IterTrace* trace, bool snap_planes,
-                    bool refresh_plane_energy) {
+                    bool refresh_plane_energy,
+                    const std::vector<TangentConcaveLine>* q_cc_lines) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -767,7 +804,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     bool is_break = prepare_next_iterate(
         iteration_limit, num_itr, alpha1, alpha2, alpha3, break_threshold,
         sf_mesh, aabb_wrapper, mat_p, sum_energy_over_sq_radius, pN, nN, c_pN,
-        c_nN, is_good, is_debug, trace);
+        c_nN, is_good, is_debug, trace, q_cc_lines);
     if (is_break) break;
 
     // Step 1: update sphere given tangent points

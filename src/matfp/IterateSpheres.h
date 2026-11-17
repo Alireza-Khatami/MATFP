@@ -113,5 +113,6 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     const double break_threshold = SCALAR_ZERO_N4,
                     const int iteration_limit = 30,
                     IterTrace* trace = nullptr, bool snap_planes = true,
-                    bool refresh_plane_energy = false);
+                    bool refresh_plane_energy = false,
+                    const std::vector<TangentConcaveLine>* q_cc_lines = nullptr);
 }  // namespace matfp
