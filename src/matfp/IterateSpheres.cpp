@@ -415,7 +415,8 @@ bool prepare_next_iterate(
     std::vector<Vector3>& nN, std::vector<Vector3>& c_pN,
     std::vector<Vector3>& c_nN, bool& is_good, bool is_debug,
     IterTrace* trace = nullptr,
-    const std::vector<TangentConcaveLine>* q_cc_lines = nullptr) {
+    const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
+    const std::vector<TangentConcaveLine>* own_cc_skip = nullptr) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -444,6 +445,25 @@ bool prepare_next_iterate(
     if (q_sq_dist_to_cc < SQ_DIST_TO_CC &&
         mat_p.is_normal_covered_by_cc_lines(qnormal)) {
       is_skip_add_new_tan_pl = true;
+      // own_cc_skip (default null = MATFP as is): skip only when q's concave line (nearest, by geometry) is one of
+      // the sphere's own; MATFP skips for any line once qnormal is in one of the sphere's fans
+      if (own_cc_skip && !own_cc_skip->empty()) {
+        int best = -1;
+        double best_d = DBL_MAX;
+        for (int k = 0; k < (int)own_cc_skip->size(); k++) {
+          const auto& l = (*own_cc_skip)[k];
+          const Vector3 ab = l.ref_vs_pos[1] - l.ref_vs_pos[0];
+          const double t = std::max(0., std::min(1., (q - l.ref_vs_pos[0]).dot(ab) / std::max(ab.squaredNorm(), 1e-300)));
+          const double d = (l.ref_vs_pos[0] + t * ab - q).squaredNorm();
+          if (d < best_d) best_d = d, best = k;
+        }
+        TangentConcaveLine ql = (*own_cc_skip)[best];
+        ql.tan_point = q;
+        bool own = false;
+        for (const auto& l : mat_p.tan_cc_lines)
+          if (l == ql) { own = true; break; }
+        is_skip_add_new_tan_pl = own;
+      }
       if (is_debug) {
         logger().debug(
             "[Iterate] mat_p {} num_itr: {} skip adding tan_pl of q_fid: {}, "
@@ -762,7 +782,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     const double break_threshold, const int iteration_limit,
                     IterTrace* trace, bool snap_planes,
                     bool refresh_plane_energy,
-                    const std::vector<TangentConcaveLine>* q_cc_lines) {
+                    const std::vector<TangentConcaveLine>* q_cc_lines,
+                    const std::vector<TangentConcaveLine>* own_cc_skip) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -804,7 +825,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     bool is_break = prepare_next_iterate(
         iteration_limit, num_itr, alpha1, alpha2, alpha3, break_threshold,
         sf_mesh, aabb_wrapper, mat_p, sum_energy_over_sq_radius, pN, nN, c_pN,
-        c_nN, is_good, is_debug, trace, q_cc_lines);
+        c_nN, is_good, is_debug, trace, q_cc_lines, own_cc_skip);
     if (is_break) break;
 
     // Step 1: update sphere given tangent points
