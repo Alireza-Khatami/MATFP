@@ -27,7 +27,8 @@ bool update_sphere_given_plN_opt(
     const std::vector<Vector3>& nN, const double alpha3,
     const std::vector<Vector3>& c_pN, const std::vector<Vector3>& c_nN,
     Vector3& new_center, double& new_sq_radius, bool is_debug,
-    IterTrace* trace = nullptr, int iter = 0) {
+    IterTrace* trace = nullptr, int iter = 0, double sheet_reg = 0.,
+    const Vector3* sheet_c0 = nullptr) {
   // trace: N, b, x of this solve, fail = -1 or Stop SOLVE_*
   auto rec = [&](int fail, const Matrix4* N, const Vector4* b, const Vector4* x) {
     if (!trace) return;
@@ -72,6 +73,17 @@ bool update_sphere_given_plN_opt(
     D += alpha1 + alpha2;
     E += common * p;
     F += (alpha1 + alpha2) * n.dot(p);
+  }
+  // sheet_reg > 0, exactly 2 planes, no concave line: + sheet_reg |(I - m m^T)(c - c0)|^2, m = sheet normal
+  // (n0 - n1) / |n0 - n1|: the anchors alone set the position along the sheet (default 0 = MATFP as is)
+  if (sheet_reg > 0. && sheet_c0 && pN.size() == 2 && c_pN.empty()) {
+    Vector3 m = nN[0] - nN[1];
+    if (m.norm() > SCALAR_ZERO_N6) {
+      m.normalize();
+      Matrix3 P = Matrix3::Identity() - m * m.transpose();
+      A += sheet_reg * P;
+      E += sheet_reg * (P * (*sheet_c0));
+    }
   }
   // if any concave line
   for (int i = 0; i < c_pN.size(); i++) {
@@ -783,7 +795,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     IterTrace* trace, bool snap_planes,
                     bool refresh_plane_energy,
                     const std::vector<TangentConcaveLine>* q_cc_lines,
-                    const std::vector<TangentConcaveLine>* own_cc_skip) {
+                    const std::vector<TangentConcaveLine>* own_cc_skip,
+                    double sheet_reg) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -791,6 +804,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
   }
 
   if (trace) trace->add(IterTrace::ST_INPUT, 0, mat_p);
+  const Vector3 sheet_c0 = mat_p.pos;  // sheet_reg anchor: the input centre
   // update tangent planes first
   // snap_planes false: keep the given normals and fids (each plane needs a fid for the k-ring)
   if (snap_planes) {
@@ -833,7 +847,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     double new_sq_radius = 0.;
     bool is_success = update_sphere_given_plN_opt(
         alpha1, alpha2, pN, nN, alpha3, c_pN, c_nN, new_pos, new_sq_radius,
-        is_debug, trace, num_itr);
+        is_debug, trace, num_itr, sheet_reg, &sheet_c0);
     if (is_debug)
       logger().debug("update_sphere_given_plN_opt is_success: {}", is_success);
     if (!is_success || new_sq_radius < SCALAR_ZERO_N6) {
