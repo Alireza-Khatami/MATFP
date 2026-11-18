@@ -32,7 +32,8 @@ struct IterTrace {
     ADDED_Q = 1,           // nearest point q added in prepare_next_iterate
     REMOVED_SAME_N_Q = 2,  // removed there: same normal as q
     DELETED_SAME_FID = 3,  // removed in tangent update: face already taken
-    DELETED_SIMILAR = 4    // removed in tangent update: is_same_tan_pl
+    DELETED_SIMILAR = 4,   // removed in tangent update: is_same_tan_pl
+    REMOVED_SAME_P_Q = 5   // removed there: point near q on the same primitive (q_merge_r, opt-in)
   };
   enum Stop {
     RUNNING = -1,
@@ -116,5 +117,5 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy = false,
                     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
                     const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
-                    double sheet_reg = 0.);
+                    double sheet_reg = 0., double q_merge_r = 0.);
 }  // namespace matfp

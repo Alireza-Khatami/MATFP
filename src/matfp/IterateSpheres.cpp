@@ -14,10 +14,21 @@
 #include "matfp/Common.h"
 #include "matfp/InscribedSpheres.h"
 
+#include <geogram/basic/geometry_nd.h>
+
 namespace matfp {
 /////////////////////////////////////////////////////////////////////////////////////
 // Helper Functions
 /////////////////////////////////////////////////////////////////////////////////////
+// p on the closed triangle fid (interior, edge or vertex), within tol
+static bool on_closed_facet(const GEO::Mesh& sf_mesh, int fid, const Vector3& p, double tol) {
+  if (fid < 0) return false;
+  const GEO::vec3 a = sf_mesh.vertices.point(sf_mesh.facets.vertex(fid, 0));
+  const GEO::vec3 b = sf_mesh.vertices.point(sf_mesh.facets.vertex(fid, 1));
+  const GEO::vec3 c = sf_mesh.vertices.point(sf_mesh.facets.vertex(fid, 2));
+  return GEO::Geom::point_triangle_squared_distance(GEO::vec3(p[0], p[1], p[2]), a, b, c) <= tol * tol;
+}
+
 // This energy function has 3 parts with weights:
 // 1. distance to tangent point -> alpha 1 (pN, nN)
 // 2. distance to tangent plane -> alpha 2 (pN, nN)
@@ -428,7 +439,8 @@ bool prepare_next_iterate(
     std::vector<Vector3>& c_nN, bool& is_good, bool is_debug,
     IterTrace* trace = nullptr,
     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
-    const std::vector<TangentConcaveLine>* own_cc_skip = nullptr) {
+    const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
+    double q_merge_r = 0.) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -529,9 +541,21 @@ bool prepare_next_iterate(
       std::vector<TangentPlane> new_tan_planes;
       new_tan_planes.push_back(tan_pl_q);
       for (auto& tan_pl : mat_p.tan_planes) {
-        if (tan_pl.is_same_normal(qnormal)) {
+        // q_merge_r > 0 (default 0 = MATFP as is): also replace a plane whose point is within q_merge_r * r of q
+        // and on the same primitive (the point on q's closed face, or q on the plane's closed face)
+        bool same_p = false;
+        if (q_merge_r > 0 && !tan_pl.is_same_normal(qnormal)) {
+          const double r = std::sqrt(mat_p.sq_radius);
+          const double tol = q_merge_r * r, on_tol = 1e-4 * r;
+          for (const auto& tp : tan_pl.points)
+            if ((tp - q).norm() <= tol && (on_closed_facet(sf_mesh, q_fid, tp, on_tol) ||
+                                           on_closed_facet(sf_mesh, tan_pl.fid, q, on_tol)))
+              same_p = true;
+        }
+        if (tan_pl.is_same_normal(qnormal) || same_p) {
           tan_pl.is_deleted = true;
-          if (trace) removed.push_back({tan_pl, IterTrace::REMOVED_SAME_N_Q});
+          if (trace)
+            removed.push_back({tan_pl, same_p ? IterTrace::REMOVED_SAME_P_Q : IterTrace::REMOVED_SAME_N_Q});
           if (is_debug) {
             logger().debug(
                 "[Iterate] mat_p {} num_itr: {} remove tangent plane:",
@@ -796,7 +820,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy,
                     const std::vector<TangentConcaveLine>* q_cc_lines,
                     const std::vector<TangentConcaveLine>* own_cc_skip,
-                    double sheet_reg) {
+                    double sheet_reg, double q_merge_r) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -839,7 +863,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     bool is_break = prepare_next_iterate(
         iteration_limit, num_itr, alpha1, alpha2, alpha3, break_threshold,
         sf_mesh, aabb_wrapper, mat_p, sum_energy_over_sq_radius, pN, nN, c_pN,
-        c_nN, is_good, is_debug, trace, q_cc_lines, own_cc_skip);
+        c_nN, is_good, is_debug, trace, q_cc_lines, own_cc_skip, q_merge_r);
     if (is_break) break;
 
     // Step 1: update sphere given tangent points
