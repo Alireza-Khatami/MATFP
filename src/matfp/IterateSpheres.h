@@ -68,6 +68,7 @@ struct IterTrace {
   std::vector<double> q_sq_dist_to_cc;
   int stop = RUNNING, num_itr = 0;
   bool is_good = false;
+  int spill_back = -1;  // spill_back: end sphere went back to the input (0) or the solve of pass k - 1 (k); -1 = no
 
   // every 4x4 solve: N * (c, r) = b, N row-major; x = (c, r), NaN if not
   // invertible; fail = -1 or the Stop SOLVE_* value
@@ -117,5 +118,6 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy = false,
                     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
                     const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
-                    double sheet_reg = 0., double q_merge_r = 0., bool q_cone = false);
+                    double sheet_reg = 0., double q_merge_r = 0., bool q_cone = false,
+                    double spill_back = 0.);
 }  // namespace matfp

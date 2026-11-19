@@ -860,7 +860,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy,
                     const std::vector<TangentConcaveLine>* q_cc_lines,
                     const std::vector<TangentConcaveLine>* own_cc_skip,
-                    double sheet_reg, double q_merge_r, bool q_cone) {
+                    double sheet_reg, double q_merge_r, bool q_cone,
+                    double spill_back) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -896,6 +897,17 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     mat_p.print_cc_lines();
   }
 
+  // spill_back > 0: the last sphere with |q - c| >= (1 - spill_back) r (q: nearest surface point)
+  auto fits = [&](const MVertex& m) {
+    Vector3 q; double sq;
+    aabb_wrapper.get_nearest_point_on_sf(m.pos, q, sq);
+    return std::sqrt(sq) >= (1. - spill_back) * std::sqrt(m.sq_radius);
+  };
+  bool has_fit = false;
+  Vector3 fit_pos = mat_p.pos;
+  double fit_sq_radius = mat_p.sq_radius;
+  int fit_itr = -1;
+  if (spill_back > 0. && fits(mat_p)) has_fit = true;
   bool is_good = false;
   while (true) {
     // update is_good
@@ -933,6 +945,8 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
         if (!tan_pl.points.empty())
           tan_pl.update_energy_value(mat_p.pos, std::sqrt(mat_p.sq_radius), alpha1, alpha2);
     if (trace) trace->add(IterTrace::ST_SOLVE, num_itr, mat_p);
+    if (spill_back > 0. && fits(mat_p))
+      has_fit = true, fit_pos = mat_p.pos, fit_sq_radius = mat_p.sq_radius, fit_itr = num_itr;
 
     // Step 2: update tangent points given new sphere
     // 1. update tangent planes
@@ -954,6 +968,16 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     num_itr++;
     // mat_p.store_sq_energy(aabb_wrapper);
   }  // while true
+
+  // spill_back: a sphere that did not converge and left the shape goes back to its last fitting sphere
+  if (spill_back > 0. && !is_good && has_fit && !fits(mat_p)) {
+    mat_p.pos = fit_pos;
+    mat_p.sq_radius = fit_sq_radius;
+    if (trace) {
+      trace->spill_back = fit_itr + 1;
+      trace->add(IterTrace::ST_SOLVE, num_itr, mat_p);
+    }
+  }
 
   if (is_debug)
     logger().debug("[Iterate] mat_p: {} iterated {} time, is_good: {}",
