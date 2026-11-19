@@ -29,6 +29,41 @@ static bool on_closed_facet(const GEO::Mesh& sf_mesh, int fid, const Vector3& p,
   return GEO::Geom::point_triangle_squared_distance(GEO::vec3(p[0], p[1], p[2]), a, b, c) <= tol * tol;
 }
 
+// q on an edge of fid (not at a vertex, within tol): normal from the edge's cone, as contact_cone proj does:
+// u = q - c projected into the fan of the two face normals (nearer face normal if outside); sharp convex edge
+// (dihedral >= sharp_deg): the face normal nearer u. false: q inside the face, at a vertex or on an open edge.
+static bool q_edge_cone_normal(const GEO::Mesh& sf_mesh, int fid, const Vector3& q, const Vector3& c, double tol,
+                               double sharp_deg, Vector3& out) {
+  if (fid < 0) return false;
+  auto P = [&](GEO::index_t v) { const GEO::vec3 x = sf_mesh.vertices.point(v); return Vector3(x[0], x[1], x[2]); };
+  for (GEO::index_t le = 0; le < 3; le++)
+    if ((P(sf_mesh.facets.vertex(fid, le)) - q).norm() <= tol) return false;
+  for (GEO::index_t le = 0; le < 3; le++) {
+    const Vector3 a = P(sf_mesh.facets.vertex(fid, le)), b = P(sf_mesh.facets.vertex(fid, (le + 1) % 3));
+    const Vector3 ab = b - a;
+    const double t = std::max(0., std::min(1., (q - a).dot(ab) / std::max(ab.squaredNorm(), 1e-300)));
+    if ((a + t * ab - q).norm() > tol) continue;
+    const GEO::index_t nf = sf_mesh.facets.adjacent(fid, le);
+    if (nf == GEO::NO_FACET) return false;
+    const Vector3 n1 = get_mesh_facet_normal(sf_mesh, fid), n2 = get_mesh_facet_normal(sf_mesh, nf);
+    const Vector3 u = (q - c).normalized();
+    const double cs = n1.dot(n2), b1 = n1.dot(u), b2 = n2.dot(u);
+    Vector3 o(0, 0, 0);  // nf's vertex off the edge
+    for (GEO::index_t k = 0; k < 3; k++) o += P(sf_mesh.facets.vertex(nf, k));
+    o = o - a - b;
+    const bool convex = (o - a).dot(n1) < 0;
+    const bool sharp = cs <= std::cos(sharp_deg * M_PI / 180.);
+    const double det = 1 - cs * cs;
+    const double l1 = det > 1e-12 ? (b1 - cs * b2) / det : 0, l2 = det > 1e-12 ? (b2 - cs * b1) / det : 0;
+    if (!(sharp && convex) && det > 1e-12 && l1 >= 0 && l2 >= 0)
+      out = (l1 * n1 + l2 * n2).normalized();
+    else
+      out = b1 >= b2 ? n1 : n2;
+    return true;
+  }
+  return false;
+}
+
 // This energy function has 3 parts with weights:
 // 1. distance to tangent point -> alpha 1 (pN, nN)
 // 2. distance to tangent plane -> alpha 2 (pN, nN)
@@ -440,7 +475,7 @@ bool prepare_next_iterate(
     IterTrace* trace = nullptr,
     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
     const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
-    double q_merge_r = 0.) {
+    double q_merge_r = 0., bool q_cone = false) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -535,6 +570,11 @@ bool prepare_next_iterate(
     // create new tangent plane
     // and update existing tangent planes
     if (!is_skip_add_new_tan_pl) {
+      // q_cone (default false = MATFP as is): q on an edge takes the edge's cone normal, not q_fid's face normal
+      Vector3 pl_n = qnormal;
+      if (q_cone)
+        q_edge_cone_normal(sf_mesh, q_fid, q, mat_p.pos, 1e-6 * std::sqrt(mat_p.sq_radius), 30., pl_n);
+      const Vector3& qnormal = pl_n;
       TangentPlane tan_pl_q(qnormal);
       tan_pl_q.points.push_back(q);
       tan_pl_q.fid = q_fid;
@@ -820,7 +860,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy,
                     const std::vector<TangentConcaveLine>* q_cc_lines,
                     const std::vector<TangentConcaveLine>* own_cc_skip,
-                    double sheet_reg, double q_merge_r) {
+                    double sheet_reg, double q_merge_r, bool q_cone) {
   if (is_debug) {
     logger().debug(
         "[Iterate] calling iterate_sphere for mat_p: {}, is_debug: {}",
@@ -863,7 +903,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
     bool is_break = prepare_next_iterate(
         iteration_limit, num_itr, alpha1, alpha2, alpha3, break_threshold,
         sf_mesh, aabb_wrapper, mat_p, sum_energy_over_sq_radius, pN, nN, c_pN,
-        c_nN, is_good, is_debug, trace, q_cc_lines, own_cc_skip, q_merge_r);
+        c_nN, is_good, is_debug, trace, q_cc_lines, own_cc_skip, q_merge_r, q_cone);
     if (is_break) break;
 
     // Step 1: update sphere given tangent points
