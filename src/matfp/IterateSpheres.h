@@ -118,6 +118,6 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy = false,
                     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
                     const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
-                    double sheet_reg = 0., double q_merge_r = 0., bool q_cone = false,
+                    double sheet_reg = 0., double q_merge_r = 0., int q_cone = 0,
                     double spill_back = 0.);
 }  // namespace matfp

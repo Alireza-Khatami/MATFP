@@ -8,6 +8,7 @@
 #include "matfp/IterateSpheres.h"
 
 #include <assert.h>
+#include <algorithm>
 
 #include <Eigen/Dense>
 
@@ -62,6 +63,79 @@ static bool q_edge_cone_normal(const GEO::Mesh& sf_mesh, int fid, const Vector3&
     return true;
   }
   return false;
+}
+
+// q_cone 2: q on a vertex of fid takes the cone normal of the vertex's faces ((q - c) projected into the conic hull of
+// their normals, as contact_cone.cone_project); a convex vertex (sharp edges there all convex): the face normal
+// nearest (q - c). Returns false if q is not on a vertex of fid.
+static bool q_vertex_cone_normal(const GEO::Mesh& sf_mesh, int fid, const Vector3& q, const Vector3& c, double tol,
+                                 double sharp_deg, Vector3& out) {
+  if (fid < 0) return false;
+  auto P = [&](GEO::index_t v) { const GEO::vec3 x = sf_mesh.vertices.point(v); return Vector3(x[0], x[1], x[2]); };
+  GEO::index_t v = GEO::NO_VERTEX;
+  for (GEO::index_t le = 0; le < 3; le++)
+    if ((P(sf_mesh.facets.vertex(fid, le)) - q).norm() <= tol) v = sf_mesh.facets.vertex(fid, le);
+  if (v == GEO::NO_VERTEX) return false;
+  // faces around v (walk across the edges that contain v)
+  std::vector<GEO::index_t> fs{(GEO::index_t)fid}, st{(GEO::index_t)fid};
+  int n_sharp = 0, n_sharp_convex = 0;
+  const double cs_sharp = std::cos(sharp_deg * M_PI / 180.);
+  while (!st.empty()) {
+    const GEO::index_t f = st.back();
+    st.pop_back();
+    for (GEO::index_t le = 0; le < 3; le++) {
+      const GEO::index_t a = sf_mesh.facets.vertex(f, le), b = sf_mesh.facets.vertex(f, (le + 1) % 3);
+      if (a != v && b != v) continue;
+      const GEO::index_t nf = sf_mesh.facets.adjacent(f, le);
+      if (nf == GEO::NO_FACET) continue;
+      if (std::find(fs.begin(), fs.end(), nf) != fs.end()) continue;
+      const Vector3 n1 = get_mesh_facet_normal(sf_mesh, f), n2 = get_mesh_facet_normal(sf_mesh, nf);
+      if (n1.dot(n2) <= cs_sharp) {
+        Vector3 o(0, 0, 0);  // nf's vertex off the edge
+        for (GEO::index_t k = 0; k < 3; k++) o += P(sf_mesh.facets.vertex(nf, k));
+        o = o - P(a) - P(b);
+        n_sharp++;
+        n_sharp_convex += (o - P(a)).dot(n1) < 0;
+      }
+      fs.push_back(nf);
+      st.push_back(nf);
+    }
+  }
+  std::vector<Vector3> N;
+  for (GEO::index_t f : fs) N.push_back(get_mesh_facet_normal(sf_mesh, f));
+  const Vector3 u = (q - c).normalized();
+  int best_f = 0;
+  for (int i = 1; i < (int)N.size(); i++)
+    if (N[i].dot(u) > N[best_f].dot(u)) best_f = i;
+  if (n_sharp > 0 && n_sharp == n_sharp_convex) {  // convex vertex: empty cone
+    out = N[best_f];
+    return true;
+  }
+  // nearest point of the cone to u lies on a face of <= 3 generators
+  double best = DBL_MAX;
+  Vector3 bv(0, 0, 0);
+  const int k = (int)N.size();
+  for (int i = 0; i < k; i++) {
+    const double l = N[i].dot(u);
+    if (l > 0 && (u - l * N[i]).norm() < best) best = (u - l * N[i]).norm(), bv = l * N[i];
+    for (int j = i + 1; j < k; j++) {
+      const double cs = N[i].dot(N[j]), b1 = N[i].dot(u), b2 = N[j].dot(u), det = 1 - cs * cs;
+      if (det > 1e-12) {
+        const double l1 = (b1 - cs * b2) / det, l2 = (b2 - cs * b1) / det;
+        const Vector3 w = l1 * N[i] + l2 * N[j];
+        if (l1 >= 0 && l2 >= 0 && (u - w).norm() < best) best = (u - w).norm(), bv = w;
+      }
+      for (int m = j + 1; m < k; m++) {
+        Eigen::Matrix3d M;
+        M.col(0) = N[i], M.col(1) = N[j], M.col(2) = N[m];
+        if (std::abs(M.determinant()) < 1e-12) continue;
+        const Eigen::Vector3d l3 = M.inverse() * u;
+        if (l3.minCoeff() >= 0) best = 0, bv = u;
+      }
+    }
+  }
+  out = bv.norm() > 1e-9 ? Vector3(bv.normalized()) : N[best_f];
+  return true;
 }
 
 // This energy function has 3 parts with weights:
@@ -475,7 +549,7 @@ bool prepare_next_iterate(
     IterTrace* trace = nullptr,
     const std::vector<TangentConcaveLine>* q_cc_lines = nullptr,
     const std::vector<TangentConcaveLine>* own_cc_skip = nullptr,
-    double q_merge_r = 0., bool q_cone = false) {
+    double q_merge_r = 0., int q_cone = 0) {
   pN.clear();
   nN.clear();
   c_pN.clear();
@@ -570,10 +644,13 @@ bool prepare_next_iterate(
     // create new tangent plane
     // and update existing tangent planes
     if (!is_skip_add_new_tan_pl) {
-      // q_cone (default false = MATFP as is): q on an edge takes the edge's cone normal, not q_fid's face normal
+      // q_cone (default 0 = MATFP as is): 1 q on an edge takes the edge's cone normal, not q_fid's face normal;
+      // 2 also q on a vertex takes the vertex's cone normal (q_vertex_cone_normal)
       Vector3 pl_n = qnormal;
-      if (q_cone)
-        q_edge_cone_normal(sf_mesh, q_fid, q, mat_p.pos, 1e-6 * std::sqrt(mat_p.sq_radius), 30., pl_n);
+      const double q_tol = 1e-6 * std::sqrt(mat_p.sq_radius);
+      if (q_cone >= 2 && q_vertex_cone_normal(sf_mesh, q_fid, q, mat_p.pos, q_tol, 30., pl_n)) {
+      } else if (q_cone >= 1)
+        q_edge_cone_normal(sf_mesh, q_fid, q, mat_p.pos, q_tol, 30., pl_n);
       const Vector3& qnormal = pl_n;
       TangentPlane tan_pl_q(qnormal);
       tan_pl_q.points.push_back(q);
@@ -860,7 +937,7 @@ bool iterate_sphere(const GEO::Mesh& sf_mesh,
                     bool refresh_plane_energy,
                     const std::vector<TangentConcaveLine>* q_cc_lines,
                     const std::vector<TangentConcaveLine>* own_cc_skip,
-                    double sheet_reg, double q_merge_r, bool q_cone,
+                    double sheet_reg, double q_merge_r, int q_cone,
                     double spill_back) {
   if (is_debug) {
     logger().debug(
